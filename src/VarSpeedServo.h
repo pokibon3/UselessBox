@@ -7,7 +7,7 @@ class VarSpeedServo {
  public:
   static constexpr int kMinDeg = 0;
   static constexpr int kMaxDeg = 180;
-  static constexpr int kPulseMinUs = 600;
+  static constexpr int kPulseMinUs = 500;
   static constexpr int kPulseMaxUs = 2500;
   static constexpr int kFrameRateHz = 50;
   static constexpr uint32_t kCompareChannel = 1;
