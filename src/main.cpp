@@ -14,9 +14,10 @@
 #define TOUCH_RELEASE_RESET_MS 250
 #define FIRE_RANDOM_MIN_MS 100
 #define FIRE_RANDOM_MAX_MS 3000
-#define FEINT_HOLD_BASE_MS 3000
-#define FEINT_HOLD_RANDOM_MAX_MS 2000
-#define SERVO_REST_ANGLE 175
+#define FIRE_MAX_ATTEMPTS 3
+#define FEINT_INTERVAL_MIN_MS 300
+#define FEINT_INTERVAL_MAX_MS 3000
+#define SERVO_REST_ANGLE 172
 #define SERVO_ATTACK_ANGLE 115
 #define FEINT_RATIO_MIN_PERCENT 60
 #define FEINT_RATIO_MAX_PERCENT 80
@@ -37,6 +38,12 @@ void doFeint() {
   servo.write(feintTarget, 255, true);
   delay(60);
   servo.write(SERVO_REST_ANGLE, 255, true);
+  delay(40);
+}
+
+uint32_t nextFeintDelayMs() {
+  return static_cast<uint32_t>(
+      random(FEINT_INTERVAL_MIN_MS, FEINT_INTERVAL_MAX_MS + 1));
 }
 
 // サーボを0度からtoDegまで少しずつ動かしながらスイッチを監視する
@@ -66,6 +73,7 @@ void goToSleep() {
 }
 
 void setup() {
+  Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
   pinMode(SWITCH_PIN, INPUT_PULLUP);
   servo.attach(SERVO_PIN);
@@ -107,13 +115,18 @@ void loop() {
   digitalWrite(LED_PIN, touchActive ? HIGH : LOW);
 
   static bool prevSwitchOn = false;
+  static bool prevTouchActive = false;
   static bool pendingRun = false;
   static uint32_t nonTouchStartMs = 0;
   static uint32_t fireAtMs = 0;
-  static uint32_t touchHoldStartMs = 0;
   static uint32_t feintAtMs = 0;
-  static bool feintDone = false;
   static uint32_t touchReleaseStartMs = 0;
+  static uint8_t fireAttempts = 0;
+
+  if (touchActive != prevTouchActive) {
+    Serial.println(touchActive ? "touchActive ON" : "touchActive OFF");
+    prevTouchActive = touchActive;
+  }
 
   // SWがONになった瞬間:
   // 触っていなければ即実行、触っていれば離されるまで保留
@@ -121,10 +134,9 @@ void loop() {
     pendingRun = true;
     nonTouchStartMs = 0;
     fireAtMs = 0;
-    touchHoldStartMs = 0;
     feintAtMs = 0;
-    feintDone = false;
     touchReleaseStartMs = 0;
+    fireAttempts = 0;
   }
 
   // SW ON中かつ保留中:
@@ -135,23 +147,18 @@ void loop() {
       fireAtMs = 0;
       touchReleaseStartMs = 0;
 
-      if (touchHoldStartMs == 0) {
-        touchHoldStartMs = millis();
-      }
       if (feintAtMs == 0) {
-        const uint32_t extra = static_cast<uint32_t>(
-            random(0, FEINT_HOLD_RANDOM_MAX_MS + 1));
-        feintAtMs = touchHoldStartMs + FEINT_HOLD_BASE_MS + extra;
+        feintAtMs = millis() + nextFeintDelayMs();
       }
-      if (!feintDone && feintAtMs != 0 && static_cast<int32_t>(millis() - feintAtMs) >= 0) {
+
+      if (feintAtMs != 0 && static_cast<int32_t>(millis() - feintAtMs) >= 0) {
         doFeint();
-        feintDone = true;
+        feintAtMs = millis() + nextFeintDelayMs();
       }
     } else {
       if (touchReleaseStartMs == 0) {
         touchReleaseStartMs = millis();
       } else if (millis() - touchReleaseStartMs >= TOUCH_RELEASE_RESET_MS) {
-        touchHoldStartMs = 0;
         feintAtMs = 0;
       }
 
@@ -166,10 +173,18 @@ void loop() {
       }
 
       if (fireAtMs != 0 && static_cast<int32_t>(millis() - fireAtMs) >= 0) {
+        ++fireAttempts;
         servo.write(SERVO_ATTACK_ANGLE, 255, true);
         servo.write(SERVO_REST_ANGLE, 255, true);
-        pendingRun = false;
         fireAtMs = 0;
+
+        if (digitalRead(SWITCH_PIN) == HIGH) {
+          pendingRun = false;
+        } else if (fireAttempts >= FIRE_MAX_ATTEMPTS) {
+          pendingRun = false;
+        } else {
+          nonTouchStartMs = millis();
+        }
       }
     }
   }
@@ -179,10 +194,9 @@ void loop() {
     pendingRun = false;
     nonTouchStartMs = 0;
     fireAtMs = 0;
-    touchHoldStartMs = 0;
     feintAtMs = 0;
-    feintDone = false;
     touchReleaseStartMs = 0;
+    fireAttempts = 0;
   }
   prevSwitchOn = switchOn;
 
