@@ -9,7 +9,8 @@
 #define SERVO_PIN  3  // サーボ制御ピン（配線に合わせて変更）
 #define SWITCH_PIN 4  // トグルスイッチ入力ピン（配線に合わせて変更）
 #define TOUCH_PIN  A0 // タッチ電極入力ピン
-#define TOUCH_SERVO_THRESHOLD 50
+#define TOUCH_ACTIVE_RAW_THRESHOLD 300
+#define SWITCH_DEBOUNCE_MS 30
 #define TOUCH_RELEASE_STABLE_MS 150
 #define TOUCH_RELEASE_RESET_MS 250
 #define FIRE_RANDOM_MIN_MS 100
@@ -19,8 +20,8 @@
 #define FEINT_INTERVAL_MAX_MS 3000
 #define SERVO_REST_ANGLE 172
 #define SERVO_ATTACK_ANGLE 115
-#define FEINT_RATIO_MIN_PERCENT 60
-#define FEINT_RATIO_MAX_PERCENT 80
+#define FEINT_RATIO_MIN_PERCENT 52
+#define FEINT_RATIO_MAX_PERCENT 72
                       // INPUT_PULLUP使用: LOW=ON, HIGH=OFF
 
 VarSpeedServo servo;
@@ -73,7 +74,6 @@ void goToSleep() {
 }
 
 void setup() {
-  Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
   pinMode(SWITCH_PIN, INPUT_PULLUP);
   servo.attach(SERVO_PIN);
@@ -110,30 +110,41 @@ void setup() {
 void loop() {
   touchUpdate();
 
-  const bool touchActive = touchIsPressed() || (touchDelta() >= TOUCH_SERVO_THRESHOLD);
-  const bool switchOn = (digitalRead(SWITCH_PIN) == LOW);
+  const uint16_t raw = touchRaw();
+  const bool touchActive = (raw >= TOUCH_ACTIVE_RAW_THRESHOLD);
+  const bool switchOnRaw = (digitalRead(SWITCH_PIN) == LOW);
+
+  static bool switchOnStable = false;
+  static bool lastSwitchOnRaw = false;
+  static uint32_t switchDebounceStartMs = 0;
+
+  if (switchOnRaw != lastSwitchOnRaw) {
+    lastSwitchOnRaw = switchOnRaw;
+    switchDebounceStartMs = millis();
+  } else if (switchOnStable != switchOnRaw &&
+             (millis() - switchDebounceStartMs >= SWITCH_DEBOUNCE_MS)) {
+    switchOnStable = switchOnRaw;
+  }
+
+  const bool switchOn = switchOnStable;
   digitalWrite(LED_PIN, touchActive ? HIGH : LOW);
 
-  static bool prevSwitchOn = false;
-  static bool prevTouchActive = false;
   static bool pendingRun = false;
+  static bool switchHandled = false;
   static uint32_t nonTouchStartMs = 0;
   static uint32_t fireAtMs = 0;
   static uint32_t feintAtMs = 0;
   static uint32_t touchReleaseStartMs = 0;
   static uint8_t fireAttempts = 0;
 
-  if (touchActive != prevTouchActive) {
-    Serial.println(touchActive ? "touchActive ON" : "touchActive OFF");
-    prevTouchActive = touchActive;
-  }
-
-  // SWがONになった瞬間:
-  // 触っていなければ即実行、触っていれば離されるまで保留
-  if (switchOn && !prevSwitchOn) {
+  // SWがONなら一度だけ起動する。立ち上がり瞬間を取り逃がしても、
+  // ONが続いている限り次のループで拾えるようにする。
+  if (switchOn && !switchHandled) {
     pendingRun = true;
+    switchHandled = true;
     nonTouchStartMs = 0;
-    fireAtMs = 0;
+    fireAtMs = millis() + static_cast<uint32_t>(
+        random(FIRE_RANDOM_MIN_MS, FIRE_RANDOM_MAX_MS + 1));
     feintAtMs = 0;
     touchReleaseStartMs = 0;
     fireAttempts = 0;
@@ -144,7 +155,6 @@ void loop() {
   if (switchOn && pendingRun) {
     if (touchActive) {
       nonTouchStartMs = 0;
-      fireAtMs = 0;
       touchReleaseStartMs = 0;
 
       if (feintAtMs == 0) {
@@ -164,15 +174,15 @@ void loop() {
 
       if (nonTouchStartMs == 0) {
         nonTouchStartMs = millis();
-      } else if (millis() - nonTouchStartMs >= TOUCH_RELEASE_STABLE_MS) {
-        if (fireAtMs == 0) {
-          const uint32_t delayMs = static_cast<uint32_t>(
-              random(FIRE_RANDOM_MIN_MS, FIRE_RANDOM_MAX_MS + 1));
-          fireAtMs = millis() + delayMs;
-        }
       }
 
-      if (fireAtMs != 0 && static_cast<int32_t>(millis() - fireAtMs) >= 0) {
+      const bool touchReleasedStable =
+          (nonTouchStartMs != 0) &&
+          (millis() - nonTouchStartMs >= TOUCH_RELEASE_STABLE_MS);
+
+      if (touchReleasedStable &&
+          fireAtMs != 0 &&
+          static_cast<int32_t>(millis() - fireAtMs) >= 0) {
         ++fireAttempts;
         servo.write(SERVO_ATTACK_ANGLE, 255, true);
         servo.write(SERVO_REST_ANGLE, 255, true);
@@ -184,6 +194,8 @@ void loop() {
           pendingRun = false;
         } else {
           nonTouchStartMs = millis();
+          fireAtMs = millis() + static_cast<uint32_t>(
+              random(FIRE_RANDOM_MIN_MS, FIRE_RANDOM_MAX_MS + 1));
         }
       }
     }
@@ -192,13 +204,13 @@ void loop() {
   // SW OFFで保留状態をクリア
   if (!switchOn) {
     pendingRun = false;
+    switchHandled = false;
     nonTouchStartMs = 0;
     fireAtMs = 0;
     feintAtMs = 0;
     touchReleaseStartMs = 0;
     fireAttempts = 0;
   }
-  prevSwitchOn = switchOn;
 
   // ディープスリープへ
  // goToSleep();
