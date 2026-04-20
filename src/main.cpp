@@ -18,6 +18,8 @@
 #define FIRE_MAX_ATTEMPTS 3
 #define FEINT_INTERVAL_MIN_MS 300
 #define FEINT_INTERVAL_MAX_MS 3000
+#define FEINT_RETURN_MIN_MS 60
+#define FEINT_RETURN_MAX_MS 3000
 #define SERVO_REST_ANGLE 172
 #define SERVO_ATTACK_ANGLE 115
 #define FEINT_RATIO_MIN_PERCENT 52
@@ -35,9 +37,11 @@ void doFeint() {
   const long ratio = random(FEINT_RATIO_MIN_PERCENT, FEINT_RATIO_MAX_PERCENT + 1);
   const int feintStroke = (fullStroke * static_cast<int>(ratio)) / 100;
   const int feintTarget = SERVO_REST_ANGLE - feintStroke;
+  const uint32_t returnDelayMs = static_cast<uint32_t>(
+      random(FEINT_RETURN_MIN_MS, FEINT_RETURN_MAX_MS + 1));
 
   servo.write(feintTarget, 255, true);
-  delay(60);
+  delay(returnDelayMs);
   servo.write(SERVO_REST_ANGLE, 255, true);
   delay(40);
 }
